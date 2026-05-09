@@ -40,6 +40,7 @@ export default function useCamera() {
           quality: 0.2,
           base64: true,
           skipProcessing: true,
+          mute: true,  // Disable shutter sound
         });
         setFrameCount(prev => prev + 1);
 

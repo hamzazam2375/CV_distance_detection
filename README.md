@@ -1,14 +1,18 @@
 # DriveSafe AI
 
-DriveSafe AI is a simple mobile app that uses the phone camera and a Python backend to estimate obstacle distance in real time.
+DriveSafe AI is a simple React Native mobile app that uses the phone camera and a Python Flask backend with YOLOv8 to detect obstacles and estimate distance in real time.
 
 ## What it does
 
-- Opens the camera in the app
-- Captures frames at a fixed interval
-- Sends each frame to the backend
-- Tracks motion between frames and estimates obstacle distance in cm
-- Shows the live distance and a short status message
+- Captures camera frames at regular intervals
+- Sends frames to Flask backend via Axios API
+- Uses YOLOv8 nano to detect vehicles, persons, bikes, and trucks
+- Estimates distance using pinhole camera model: `Distance = (Real Width × Focal Length) / Pixel Width`
+- Displays live distance in meters and warning status:
+  - **SAFE**: distance > 3m (green)
+  - **CAUTION**: distance 1-3m (yellow/orange)
+  - **STOP**: distance < 1m (red)
+- Shows annotated camera frame with bounding boxes
 
 ## How to run
 
@@ -20,9 +24,17 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The backend runs on port `8000`.
+The backend runs on `http://0.0.0.0:8000`.
 
-### 2. Start the app
+### 2. Configure frontend API address
+
+Update `src/services/api.js` with your backend IP:
+
+```javascript
+const BASE_URL = "http://<YOUR_MACHINE_IP>:8000";
+```
+
+### 3. Install dependencies and start the app
 
 ```bash
 npm install
@@ -31,21 +43,81 @@ npm start
 
 Use Expo Go, Android, or iOS to open the app.
 
-### 3. Check the backend address
+### 4. Test the backend connection (optional)
 
-If your device cannot reach the backend, update the IP address in `src/services/api.js`.
+```bash
+cd backend
+python test_upload.py sample.jpg
+```
 
-## Main CV concepts used
+## Main features
 
-- Frame capture: the app takes camera snapshots instead of streaming full video. See `src/hooks/useCamera.js` and `src/screens/CameraScreen.js`.
-- Image encoding and decoding: frames are sent as base64 and decoded on the backend. See `src/services/api.js` and `backend/app.py`.
-- Resizing: frames are resized before analysis to keep processing lighter. See `backend/app.py`.
-- Grayscale conversion: frames are converted to grayscale before motion tracking. See `backend/app.py`.
-- Noise reduction: Gaussian blur is used to reduce noise. See `backend/app.py`.
-- Feature detection: Shi-Tomasi corners are detected with `goodFeaturesToTrack`. See `backend/app.py`.
-- Optical flow tracking: Lucas-Kanade optical flow tracks feature movement between frames. See `backend/app.py`.
-- Motion estimation: point displacement is measured and turned into distance. See `backend/app.py`.
-- Smoothing and filtering: weighted averaging and spike handling keep the distance stable. See `backend/app.py`.
+### Frontend (React Native + Expo)
+
+- Real-time camera capture using `expo-camera`
+- Frame sending every 700ms via Axios
+- Live distance display in meters
+- Warning status visualization (colors + text messages)
+- Start/Stop camera controls
+- Silent frame capture (no shutter sound/effect)
+
+### Backend (Flask + YOLOv8)
+
+- YOLOv8 nano model for fast inference
+- Detects: car (1.8m), person (0.5m), bike (0.7m), truck (2.5m)
+- Distance estimation using bounding box width
+- Returns: object name, confidence score, distance, warning level, annotated image
+- Endpoints: `/upload-frame` (detection), `/reset` (clear state), `/health` (status check)
+
+## API Response Format
+
+```json
+{
+  "object": "car",
+  "confidence": 0.95,
+  "distance": 2.34,
+  "warning": "caution",
+  "unit": "m",
+  "status": "ok",
+  "detections": [
+    { "label": "car", "confidence": 0.95, "box": [100, 50, 400, 300] }
+  ],
+  "annotated": "<base64_jpeg>"
+}
+```
+
+## Key Technologies
+
+### Frontend
+
+- **React Native** + Expo: Cross-platform mobile development
+- **Axios**: Simple async/await API requests with timeout handling
+- **expo-camera**: Native camera access with frame capture
+
+### Backend
+
+- **Flask**: Lightweight Python web framework
+- **YOLOv8 nano**: Fast object detection (ultralytics)
+- **OpenCV**: Image processing and annotation
+- **NumPy**: Numerical calculations
+
+## How Distance Estimation Works
+
+The app uses the pinhole camera model:
+
+```
+Distance (meters) = (Real Object Width × Focal Length) / Bounding Box Width (pixels)
+```
+
+**Calibration values** (in `backend/app.py`):
+
+- Car width: 1.8m
+- Person width: 0.5m
+- Bike width: 0.7m
+- Truck width: 2.5m
+- Focal length: 800 (tune for your device camera)
+
+**To calibrate**: Measure a real car 5m away, adjust FOCAL_LENGTH until the app shows ~5m.
 
 ## Project structure
 

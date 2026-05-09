@@ -3,12 +3,13 @@ import { View, Text, StyleSheet } from 'react-native';
 import { COLORS } from '../constants/theme';
 
 export default function DistanceDisplay({ distance = 0 }) {
-  const displayDistance = Number.isFinite(distance) ? Math.max(0, Math.round(distance)) : 0;
+  // Format distance in meters with 2 decimal places
+  const displayDistance = Number.isFinite(distance) ? Math.max(0, distance).toFixed(2) : '0.00';
 
   return (
     <View style={styles.container}>
       <Text style={styles.value}>{displayDistance}</Text>
-      <Text style={styles.unit}>cm</Text>
+      <Text style={styles.unit}>m</Text>
     </View>
   );
 }

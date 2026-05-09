@@ -7,8 +7,9 @@ import DistanceDisplay from '../components/DistanceDisplay';
 import { sendFrame, resetBackend } from '../services/api';
 import { COLORS } from '../constants/theme';
 
-const WARNING_DISTANCE_CM = 100;
-const DANGER_DISTANCE_CM = 40;
+// Warning levels in meters
+const CAUTION_DISTANCE_M = 3.0;  // distance > 3m: safe
+const STOP_DISTANCE_M = 1.0;     // distance < 1m: stop
 
 export default function CameraScreen({ navigation }) {
   const { cameraRef, permission, processing, askPermission, startCapture, stopCapture } =
@@ -16,67 +17,74 @@ export default function CameraScreen({ navigation }) {
 
   const [distance, setDistance] = useState(0);
   const [status, setStatus] = useState('initializing');
-
-  useEffect(() => {
-    initSession();
-    return () => stopCapture();
-  }, []);
-
-  async function initSession() {
-    const granted = await askPermission();
-    if (!granted) {
-      setStatus('permission_denied');
-      return;
-    }
-
-    await resetBackend();
-    setDistance(0);
-    startCapture(handleFrame);
-    setStatus('tracking');
-  }
+  const [running, setRunning] = useState(false);
 
   const handleFrame = useCallback(async (photo) => {
     if (!photo?.base64) return;
     setStatus('processing');
 
     try {
+      // Send frame to backend and receive detection results
       const result = await sendFrame(photo.base64);
       const receivedDistance = typeof result.distance === 'number' ? result.distance : 0;
       setDistance(receivedDistance);
 
+      // Handle error statuses
       if (
-        result.status === 'preprocess_failed'
-        || result.status === 'flow_error'
-        || result.status === 'tracking_lost'
-        || result.status === 'timeout'
-        || result.error
+        result.error ||
+        result.status === 'timeout' ||
+        result.status === 'network_error' ||
+        result.status === 'no_response' ||
+        result.status === 'server_error' ||
+        result.status === 'invalid_input' ||
+        result.status === 'invalid_response'
       ) {
         setStatus('error');
-      } else if (result.status === 'no_object' || result.status === 'minimal_motion') {
+      } else if (
+        result.status === 'no_object' ||
+        result.status === 'no_allowed_object' ||
+        result.status === 'no_result' ||
+        result.status === 'model_unavailable'
+      ) {
         setStatus('no_object');
-      } else if (receivedDistance <= DANGER_DISTANCE_CM) {
-        setStatus('danger');
-      } else if (receivedDistance <= WARNING_DISTANCE_CM) {
-        setStatus('warning');
+      } else if (result.warning === 'stop') {
+        setStatus('stop');
+      } else if (result.warning === 'caution') {
+        setStatus('caution');
       } else {
         setStatus('tracking');
       }
-    } catch {
+    } catch (err) {
+      console.warn('Error in handleFrame:', err);
       setDistance(0);
       setStatus('error');
     }
   }, []);
 
+  async function handleStart() {
+    const granted = await askPermission();
+    if (!granted) {
+      setStatus('permission_denied');
+      return;
+    }
+    await resetBackend();
+    setDistance(0);
+    startCapture(handleFrame);
+    setStatus('tracking');
+    setRunning(true);
+  }
+
   function handleStop() {
     stopCapture();
-    navigation.goBack();
+    setRunning(false);
+    setStatus('initializing');
   }
 
   const statusConfig = {
     initializing: { text: 'Starting...', color: COLORS.textMuted },
     tracking: { text: 'Monitoring', color: COLORS.success },
-    warning: { text: 'Obstacle Nearby', color: COLORS.warning },
-    danger: { text: 'Stop Immediately', color: COLORS.danger },
+    caution: { text: 'Obstacle Nearby', color: COLORS.warning },
+    stop: { text: 'Stop Immediately', color: COLORS.danger },
     processing: { text: 'Checking distance...', color: COLORS.primary },
     no_object: { text: 'Path Clear', color: COLORS.success },
     error: { text: 'Connection Error', color: COLORS.danger },
@@ -94,15 +102,15 @@ export default function CameraScreen({ navigation }) {
       return 'Camera access is required to estimate obstacle distance.';
     }
 
-    if (currentStatusKey === 'danger' || currentDistance <= DANGER_DISTANCE_CM) {
-      return 'Obstacle is very close. Stop the vehicle now.';
+    if (currentStatusKey === 'stop' || currentDistance < STOP_DISTANCE_M) {
+      return 'Obstacle is very close (< 1m). Stop the vehicle immediately!';
     }
 
-    if (currentStatusKey === 'warning' || currentDistance <= WARNING_DISTANCE_CM) {
-      return 'Obstacle detected ahead. Move slowly and keep watching the screen.';
+    if (currentStatusKey === 'caution' || (currentDistance >= STOP_DISTANCE_M && currentDistance < CAUTION_DISTANCE_M)) {
+      return 'Obstacle detected nearby (1-3m). Move slowly and keep watching the screen.';
     }
 
-    return 'No nearby obstacle detected. Continue checking the path.';
+    return 'No nearby obstacle detected. Path is clear. Continue checking the camera.';
   }
 
   if (!permission) {
@@ -137,7 +145,7 @@ export default function CameraScreen({ navigation }) {
       </View>
 
       <View style={styles.cameraWrapper}>
-        <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+        <CameraView ref={cameraRef} style={styles.camera} facing="back" mute={true} />
 
         <View style={styles.distanceOverlay}>
           <DistanceDisplay distance={distance} />
@@ -160,9 +168,15 @@ export default function CameraScreen({ navigation }) {
         <Text style={styles.warningText}>{getWarningMessage(distance, status)}</Text>
       </View>
 
-      <TouchableOpacity style={styles.stopBtn} activeOpacity={0.8} onPress={handleStop}>
-        <Text style={styles.stopBtnText}>Stop Monitoring</Text>
-      </TouchableOpacity>
+      {!running ? (
+        <TouchableOpacity style={styles.btnStart} activeOpacity={0.8} onPress={handleStart}>
+          <Text style={styles.btnStartText}>Start Camera</Text>
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity style={styles.stopBtn} activeOpacity={0.8} onPress={handleStop}>
+          <Text style={styles.stopBtnText}>Stop Camera</Text>
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }
@@ -300,5 +314,18 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  btnStart: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 40,
+    paddingVertical: 14,
+    borderRadius: 30,
+    marginVertical: 16,
+    alignSelf: 'center',
+  },
+  btnStartText: {
+    color: '#000',
+    fontSize: 16,
+    fontWeight: '700',
   },
 });

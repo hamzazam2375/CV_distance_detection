@@ -3,180 +3,131 @@ from flask_cors import CORS
 import numpy as np
 import cv2
 import base64
-import time
-from collections import deque
 import traceback
 
 app = Flask(__name__)
 CORS(app)
 
-MAX_DISTANCE_CM = 200.0
-MIN_DISTANCE_CM = 20.0
-WARNING_DISTANCE_CM = 100.0
-DANGER_DISTANCE_CM = 40.0
+# Beginner-friendly settings
+FOCAL_LENGTH = 800.0  # camera focal length proxy (tune for your device)
+MAX_DISTANCE_M = 100.0  # max detectable distance in meters
 
-SAFE_RESPONSE = {'distance': MAX_DISTANCE_CM, 'status': 'safe_default', 'unit': 'cm'}
+# Warning thresholds in meters (distance estimation based on bounding box width)
+CAUTION_DISTANCE_M = 3.0  # distance > 3m: SAFE
+STOP_DISTANCE_M = 1.0    # distance < 1m: STOP, 1-3m: CAUTION
 
-prev_gray = None
-prev_points = None
-prev_time = None
-frame_number = 0
-stationary_count = 0
+# Approximate real object widths in meters (based on pinhole camera model)
+# Used for distance formula: D = (Real_Width * Focal_Length) / Pixel_Width
+REAL_WIDTHS_M = {
+    'person': 0.5,      # average shoulder width
+    'car': 1.8,         # average car width
+    'bike': 0.7,        # average bike width
+    'truck': 2.5,       # average truck width
+}
 
-MAX_DISTANCE_SPAN_CM = MAX_DISTANCE_CM - MIN_DISTANCE_CM
-SMOOTH_WINDOW = 6
-DISTANCE_SCALE = 2.0
-MIN_FEATURES = 5
-SPIKE_THRESHOLD = 2.5
-MIN_MOTION_PX = 2.0
-BLUR_KERNEL = (15, 15)
-STATIONARY_COUNT_MAX = 1
-FRAME_WIDTH = 640
-WARMUP_FRAMES = 1
-
-distance_history = deque(maxlen=SMOOTH_WINDOW)
-
-LK_PARAMS = dict(
-    winSize=(21, 21),
-    maxLevel=3,
-    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
-)
-
-FEATURE_PARAMS = dict(
-    maxCorners=80,
-    qualityLevel=0.3,
-    minDistance=5,
-    blockSize=5,
-)
+# Allowed COCO class labels mapped into our categories
+ALLOWED_LABELS = {
+    'person': 'person',
+    'car': 'car',
+    'bicycle': 'bike',
+    'motorcycle': 'bike',
+    'truck': 'truck',
+    'bus': 'truck',
+}
 
 
-def detect_features(gray):
+def decode_base64_image(b64_string):
     try:
-        return cv2.goodFeaturesToTrack(gray, **FEATURE_PARAMS)
+        img_bytes = base64.b64decode(b64_string)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        return img
     except Exception:
         return None
 
 
-def preprocess(frame_bgr):
-    try:
-        h, w = frame_bgr.shape[:2]
-        if w > FRAME_WIDTH:
-            scale = FRAME_WIDTH / w
-            frame_bgr = cv2.resize(frame_bgr, (FRAME_WIDTH, int(h * scale)),
-                                   interpolation=cv2.INTER_AREA)
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        return cv2.GaussianBlur(gray, BLUR_KERNEL, 0)
-    except Exception:
-        return None
+def estimate_distance_from_bbox(bbox_width_px, object_type):
+    """
+    Estimate distance using pinhole camera model.
+    Formula: Distance = (Real Object Width in meters × Focal Length) / Bounding Box Width in pixels
+    
+    Args:
+        bbox_width_px: width of bounding box in pixels
+        object_type: label (person, car, bike, truck)
+    
+    Returns:
+        Distance in meters (float), clamped to [0, MAX_DISTANCE_M]
+    """
+    if bbox_width_px <= 0 or object_type not in REAL_WIDTHS_M:
+        return MAX_DISTANCE_M
+
+    real_width_m = REAL_WIDTHS_M[object_type]
+    # Distance in meters = (real width × focal length) / pixel width
+    distance_m = (real_width_m * FOCAL_LENGTH) / bbox_width_px
+    # Clamp to valid range
+    distance_m = float(max(0.0, min(distance_m, MAX_DISTANCE_M)))
+    return round(distance_m, 2)
 
 
-def smooth_distance(raw_distance):
-    raw_distance = max(MIN_DISTANCE_CM, min(float(raw_distance), MAX_DISTANCE_CM))
+# Try to load YOLOv8 model (ultralytics). This will fail gracefully if not installed.
+MODEL = None
+MODEL_NAMES = {}
+try:
+    from ultralytics import YOLO
 
-    if len(distance_history) >= 3:
-        current_avg = sum(distance_history) / len(distance_history)
-        if current_avg < MAX_DISTANCE_CM and raw_distance < current_avg / SPIKE_THRESHOLD:
-            raw_distance = current_avg
+    # This uses the official YOLOv8 nano weights. Make sure you have internet
+    # or the file 'yolov8n.pt' in the working directory. ultralytics will
+    # download the weights automatically on first use if necessary.
+    MODEL = YOLO('yolov8n.pt')
+    MODEL_NAMES = MODEL.names if hasattr(MODEL, 'names') else {}
+except Exception as e:
+    MODEL = None
+    MODEL_NAMES = {}
+    print('Warning: ultralytics YOLO model not loaded:', str(e))
 
-    distance_history.append(raw_distance)
 
-    weights = list(range(1, len(distance_history) + 1))
-    weighted_sum = sum(s * w for s, w in zip(distance_history, weights))
-    return round(weighted_sum / sum(weights), 1)
-
-
-def estimate_distance(current_frame):
-    global prev_gray, prev_points, prev_time, stationary_count, frame_number
-
-    frame_number += 1
-    gray = preprocess(current_frame)
-    if gray is None:
-        return MAX_DISTANCE_CM, "preprocess_failed"
-
-    if frame_number <= WARMUP_FRAMES:
-        prev_gray = gray
-        prev_points = detect_features(gray)
-        prev_time = time.time()
-        distance_history.append(MAX_DISTANCE_CM)
-        return MAX_DISTANCE_CM, "warming_up"
-
-    if prev_gray is None:
-        prev_gray = gray
-        prev_points = detect_features(gray)
-        prev_time = time.time()
-        return MAX_DISTANCE_CM, "initializing"
-
-    if prev_points is None or len(prev_points) < MIN_FEATURES:
-        prev_points = detect_features(prev_gray)
-        if prev_points is None or len(prev_points) < MIN_FEATURES:
-            prev_gray = gray
-            prev_time = time.time()
-            stationary_count += 1
-            return smooth_distance(MAX_DISTANCE_CM), "no_object"
+def detect_primary_object(frame_bgr):
+    """
+    Runs YOLOv8 and returns a list of detections (allowed classes only).
+    Each detection is a dict: { label, confidence, box } where box is [x1,y1,x2,y2].
+    Returns (detections_list, status_str).
+    """
+    if MODEL is None:
+        return None, 'model_unavailable'
 
     try:
-        next_points, status, _ = cv2.calcOpticalFlowPyrLK(
-            prev_gray, gray, prev_points, None, **LK_PARAMS
-        )
+        # ultralytics expects RGB images
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+        # Run inference (imgs size and confidence threshold chosen for speed)
+        results = MODEL(frame_rgb, imgsz=640, conf=0.25, verbose=False)
+        if len(results) == 0:
+            return [], 'no_result'
+
+        r = results[0]
+        boxes = getattr(r, 'boxes', None)
+        if boxes is None:
+            return [], 'no_boxes'
+
+        # Extract arrays of boxes, confidences and class ids in a robust way
+        xyxy = np.array(boxes.xyxy.cpu()) if hasattr(boxes.xyxy, 'cpu') else np.array(boxes.xyxy)
+        confs = np.array(boxes.conf.cpu()) if hasattr(boxes.conf, 'cpu') else np.array(boxes.conf)
+        cls_ids = np.array(boxes.cls.cpu()).astype(int) if hasattr(boxes.cls, 'cpu') else np.array(boxes.cls).astype(int)
+
+        detections = []
+        for (box, conf, cid) in zip(xyxy, confs, cls_ids):
+            label_raw = MODEL_NAMES.get(int(cid), str(cid))
+            if label_raw in ALLOWED_LABELS:
+                detections.append({
+                    'label': ALLOWED_LABELS[label_raw],
+                    'confidence': float(conf),
+                    'box': [float(x) for x in box],
+                })
+
+        return detections, 'ok' if len(detections) > 0 else 'no_allowed_object'
     except Exception:
-        prev_gray = gray
-        prev_points = detect_features(gray)
-        prev_time = time.time()
-        return smooth_distance(MAX_DISTANCE_CM), "flow_error"
-
-    if next_points is None or status is None:
-        prev_gray = gray
-        prev_points = detect_features(gray)
-        prev_time = time.time()
-        stationary_count += 1
-        return smooth_distance(MAX_DISTANCE_CM), "tracking_lost"
-
-    good_old = prev_points[status.flatten() == 1]
-    good_new = next_points[status.flatten() == 1]
-
-    if len(good_new) < MIN_FEATURES:
-        prev_gray = gray
-        prev_points = detect_features(gray)
-        prev_time = time.time()
-        stationary_count += 1
-        return smooth_distance(MAX_DISTANCE_CM), "no_object"
-
-    displacements = np.sqrt(np.sum((good_new - good_old) ** 2, axis=1))
-    median_displacement = float(np.median(displacements))
-
-    current_time = time.time()
-    dt = max(current_time - prev_time, 0.1)
-
-    if median_displacement < MIN_MOTION_PX:
-        stationary_count += 1
-        prev_gray = gray
-        prev_points = detect_features(gray)
-        prev_time = current_time
-        status_str = "no_object" if stationary_count >= STATIONARY_COUNT_MAX else "minimal_motion"
-        return smooth_distance(MAX_DISTANCE_CM), status_str
-
-    stationary_count = 0
-    proximity_score = min((median_displacement / dt) * DISTANCE_SCALE, MAX_DISTANCE_SPAN_CM)
-    estimated_distance = MAX_DISTANCE_CM - proximity_score
-    estimated_distance = smooth_distance(estimated_distance)
-
-    if estimated_distance <= DANGER_DISTANCE_CM:
-        status_str = "danger"
-    elif estimated_distance <= WARNING_DISTANCE_CM:
-        status_str = "warning"
-    else:
-        status_str = "tracking"
-
-    prev_gray = gray
-    prev_points = good_new.reshape(-1, 1, 2)
-    prev_time = current_time
-
-    if len(prev_points) < MIN_FEATURES * 2:
-        new_features = detect_features(gray)
-        if new_features is not None:
-            prev_points = new_features
-
-    return estimated_distance, status_str
+        traceback.print_exc()
+        return None, 'detection_error'
 
 
 @app.route('/upload-frame', methods=['POST'])
@@ -186,53 +137,93 @@ def upload_frame():
     except Exception:
         data = None
 
-    if not data or not isinstance(data, dict) or 'image' not in data:
-        return jsonify(SAFE_RESPONSE), 200
+    if not data or 'image' not in data:
+        return jsonify({'error': 'missing_image'}), 400
 
+    frame = decode_base64_image(data['image'])
+    if frame is None:
+        return jsonify({'error': 'invalid_image'}), 200
+
+    # detect objects (returns list of allowed detections)
+    detections, status = detect_primary_object(frame)
+
+    # If model not available, return safe default with helpful status
+    if status == 'model_unavailable':
+        return jsonify({'object': None, 'confidence': 0.0, 'distance': MAX_DISTANCE_M, 'warning': 'safe', 'unit': 'm', 'status': 'model_unavailable'})
+
+    # No detections -> safe
+    if not detections:
+        return jsonify({'object': None, 'confidence': 0.0, 'distance': MAX_DISTANCE_M, 'warning': 'safe', 'unit': 'm', 'status': status})
+
+    # Choose the best detection (highest confidence) for distance estimate
+    best = max(detections, key=lambda d: d['confidence'])
+    x1, y1, x2, y2 = best['box']
+    bbox_w = max(1.0, abs(x2 - x1))  # bounding box width in pixels
+    distance_m = estimate_distance_from_bbox(bbox_w, best['label'])
+
+    # Determine warning level based on distance in meters
+    if distance_m < STOP_DISTANCE_M:
+        warning = 'stop'  # STOP: very close (< 1m)
+    elif distance_m < CAUTION_DISTANCE_M:
+        warning = 'caution'  # CAUTION: medium distance (1-3m)
+    else:
+        warning = 'safe'  # SAFE: far distance (> 3m)
+
+    # Draw bounding boxes and labels on the frame for visualization
+    annotated = frame.copy()
+    for det in detections:
+        bx = [int(v) for v in det['box']]
+        lx, ly, rx, ry = bx
+        label = det['label']
+        conf = det['confidence']
+
+        # color per warning (green/orange/red)
+        color = (0, 255, 0)
+        # if this detection is the best, use a brighter color
+        if det is best:
+            color = (0, 200, 255)
+
+        # draw rectangle and label
+        cv2.rectangle(annotated, (lx, ly), (rx, ry), color, 2)
+        caption = f"{label} {conf:.2f}"
+        cv2.putText(annotated, caption, (lx, max(ly - 6, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    # Encode annotated image as JPEG and then base64 for easy transport
     try:
-        image_data = data['image']
-        if not isinstance(image_data, str) or len(image_data) < 100:
-            return jsonify(SAFE_RESPONSE), 200
-
-        # faster decode: base64 -> numpy buffer -> cv2.imdecode (returns BGR)
-        try:
-            img_bytes = base64.b64decode(image_data)
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if frame_bgr is None:
-                return jsonify(SAFE_RESPONSE), 200
-        except Exception:
-            return jsonify(SAFE_RESPONSE), 200
-
-        distance, status = estimate_distance(frame_bgr)
-        distance = max(MIN_DISTANCE_CM, min(float(distance), MAX_DISTANCE_CM))
-
-        return jsonify({'distance': distance, 'status': status, 'unit': 'cm'})
-
-    except (base64.binascii.Error, ValueError):
-        return jsonify(SAFE_RESPONSE), 200
+        _, img_buf = cv2.imencode('.jpg', annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        annotated_b64 = base64.b64encode(img_buf.tobytes()).decode('ascii')
     except Exception:
-        traceback.print_exc()
-        return jsonify(SAFE_RESPONSE), 200
+        annotated_b64 = None
+
+    # Prepare response with list of detections and the annotated image
+    response = {
+        'object': best['label'],
+        'confidence': round(best['confidence'], 3),
+        'distance': distance_m,  # distance in meters
+        'warning': warning,  # 'safe', 'caution', or 'stop'
+        'unit': 'm',  # meters
+        'status': 'ok',
+        'detections': [
+            {'label': d['label'], 'confidence': round(d['confidence'], 3), 'box': d['box']} for d in detections
+        ],
+        'annotated': annotated_b64,
+    }
+
+    return jsonify(response)
 
 
 @app.route('/reset', methods=['POST'])
 def reset():
-    global prev_gray, prev_points, prev_time, stationary_count, frame_number
-    prev_gray = None
-    prev_points = None
-    prev_time = None
-    stationary_count = 0
-    frame_number = 0
-    distance_history.clear()
+    # nothing stateful to reset for this simple backend, but keep endpoint
     return jsonify({'status': 'reset'})
 
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'frames_processed': frame_number})
+    ok = MODEL is not None
+    return jsonify({'status': 'ok' if ok else 'model_unavailable'})
 
 
 if __name__ == '__main__':
-    print('Server running on http://0.0.0.0:8000')
+    print('DriveSafe AI backend starting on http://0.0.0.0:8000')
     app.run(host='0.0.0.0', port=8000, debug=True)
