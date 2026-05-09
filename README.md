@@ -1,21 +1,3 @@
-# DriveSafe AI
-
-DriveSafe AI is a simple React Native mobile app that uses the phone camera and a Python Flask backend with YOLOv8 to detect obstacles and estimate distance in real time.
-
-## What it does
-
-- Captures camera frames at regular intervals
-- Sends frames to Flask backend via Axios API
-- Uses YOLOv8 nano to detect vehicles, persons, bikes, and trucks
-- Estimates distance using pinhole camera model: `Distance = (Real Width × Focal Length) / Pixel Width`
-- Displays live distance in meters and warning status:
-  - **SAFE**: distance > 3m (green)
-  - **CAUTION**: distance 1-3m (yellow/orange)
-  - **STOP**: distance < 1m (red)
-- Shows annotated camera frame with bounding boxes
-
-## How to run
-
 ### 1. Start the backend
 
 ```bash
@@ -38,17 +20,10 @@ const BASE_URL = "http://<YOUR_MACHINE_IP>:8000";
 
 ```bash
 npm install
-npm start
+npx expo start
 ```
 
 Use Expo Go, Android, or iOS to open the app.
-
-### 4. Test the backend connection (optional)
-
-```bash
-cd backend
-python test_upload.py sample.jpg
-```
 
 ## Main features
 
@@ -64,7 +39,7 @@ python test_upload.py sample.jpg
 ### Backend (Flask + YOLOv8)
 
 - YOLOv8 nano model for fast inference
-- Detects: car (1.8m), person (0.5m), bike (0.7m), truck (2.5m)
+- Detects: car (1.76m), person (0.5m), bike (0.7m), truck (2.5m)
 - Distance estimation using bounding box width
 - Returns: object name, confidence score, distance, warning level, annotated image
 - Endpoints: `/upload-frame` (detection), `/reset` (clear state), `/health` (status check)
@@ -76,6 +51,7 @@ python test_upload.py sample.jpg
   "object": "car",
   "confidence": 0.95,
   "distance": 2.34,
+  "bbox_width_px": 312.5,
   "warning": "caution",
   "unit": "m",
   "status": "ok",
@@ -112,12 +88,19 @@ Distance (meters) = (Real Object Width × Focal Length) / Bounding Box Width (pi
 **Calibration values** (in `backend/app.py`):
 
 - Car width: 1.8m
+- Car width: 1.76m
 - Person width: 0.5m
 - Bike width: 0.7m
 - Truck width: 2.5m
-- Focal length: 800 (tune for your device camera)
+- Focal length: 2133 (fixed baseline from observed underestimation)
 
-**To calibrate**: Measure a real car 5m away, adjust FOCAL_LENGTH until the app shows ~5m.
+**Calibration mode**: The project currently uses a fixed no-input focal-length calibration baseline.
+
+## Safety thresholds
+
+- 🟢 **Safe:** distance > 3.0 m
+- 🟡 **Caution:** 2.0 m – 3.0 m
+- 🔴 **Danger / Stop:** distance < 2.0 m
 
 ## Project structure
 

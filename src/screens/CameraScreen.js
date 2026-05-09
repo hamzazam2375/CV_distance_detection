@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Image, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView } from 'expo-camera';
 import useCamera from '../hooks/useCamera';
 import DistanceDisplay from '../components/DistanceDisplay';
+import LoadingOverlay from '../components/LoadingOverlay';
 import { sendFrame, resetBackend } from '../services/api';
 import { COLORS } from '../constants/theme';
 
-// Warning levels in meters
+// Warning levels in meters (danger <2m, caution 2-3m, safe >3m)
 const CAUTION_DISTANCE_M = 3.0;  // distance > 3m: safe
-const STOP_DISTANCE_M = 1.0;     // distance < 1m: stop
+const STOP_DISTANCE_M = 2.0;     // distance < 2m: stop
 
 export default function CameraScreen({ navigation }) {
   const { cameraRef, permission, processing, askPermission, startCapture, stopCapture } =
@@ -17,17 +18,33 @@ export default function CameraScreen({ navigation }) {
 
   const [distance, setDistance] = useState(0);
   const [status, setStatus] = useState('initializing');
+  const [objectName, setObjectName] = useState(null);
+  const [confidence, setConfidence] = useState(0);
+  const [annotatedUri, setAnnotatedUri] = useState(null);
   const [running, setRunning] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const handleFrame = useCallback(async (photo) => {
     if (!photo?.base64) return;
     setStatus('processing');
+    setLoading(true);
 
     try {
       // Send frame to backend and receive detection results
       const result = await sendFrame(photo.base64);
       const receivedDistance = typeof result.distance === 'number' ? result.distance : 0;
       setDistance(receivedDistance);
+
+      // Update detected object and confidence
+      setObjectName(result.object || null);
+      setConfidence(typeof result.confidence === 'number' ? result.confidence : 0);
+
+      // Annotated image (base64 JPEG from backend)
+      if (result.annotated) {
+        setAnnotatedUri(`data:image/jpeg;base64,${result.annotated}`);
+      } else {
+        setAnnotatedUri(null);
+      }
 
       // Handle error statuses
       if (
@@ -51,13 +68,19 @@ export default function CameraScreen({ navigation }) {
         setStatus('stop');
       } else if (result.warning === 'caution') {
         setStatus('caution');
+      } else if (result.warning === 'safe') {
+        setStatus('safe');
       } else {
         setStatus('tracking');
       }
     } catch (err) {
-      console.warn('Error in handleFrame:', err);
+      console.warn('Error in handleFrame:', err?.message || err);
       setDistance(0);
+      setObjectName(null);
+      setAnnotatedUri(null);
       setStatus('error');
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -67,11 +90,16 @@ export default function CameraScreen({ navigation }) {
       setStatus('permission_denied');
       return;
     }
-    await resetBackend();
-    setDistance(0);
-    startCapture(handleFrame);
-    setStatus('tracking');
-    setRunning(true);
+    setLoading(true);
+    try {
+      await resetBackend();
+      setDistance(0);
+      startCapture(handleFrame);
+      setStatus('tracking');
+      setRunning(true);
+    } finally {
+      setLoading(false);
+    }
   }
 
   function handleStop() {
@@ -83,6 +111,7 @@ export default function CameraScreen({ navigation }) {
   const statusConfig = {
     initializing: { text: 'Starting...', color: COLORS.textMuted },
     tracking: { text: 'Monitoring', color: COLORS.success },
+    safe: { text: 'Safe', color: COLORS.success },
     caution: { text: 'Obstacle Nearby', color: COLORS.warning },
     stop: { text: 'Stop Immediately', color: COLORS.danger },
     processing: { text: 'Checking distance...', color: COLORS.primary },
@@ -103,14 +132,37 @@ export default function CameraScreen({ navigation }) {
     }
 
     if (currentStatusKey === 'stop' || currentDistance < STOP_DISTANCE_M) {
-      return 'Obstacle is very close (< 1m). Stop the vehicle immediately!';
+      return 'Obstacle is very close (< 2m). Stop the vehicle immediately!';
     }
 
     if (currentStatusKey === 'caution' || (currentDistance >= STOP_DISTANCE_M && currentDistance < CAUTION_DISTANCE_M)) {
-      return 'Obstacle detected nearby (1-3m). Move slowly and keep watching the screen.';
+      return 'Obstacle detected nearby (2-3m). Move slowly and keep watching the screen.';
     }
 
     return 'No nearby obstacle detected. Path is clear. Continue checking the camera.';
+  }
+
+  // Map internal status keys to a short label for the UI
+  function statusToLabel(key) {
+    switch (key) {
+      case 'stop':
+        return 'STOP: Obstacle very close';
+      case 'caution':
+        return 'CAUTION: Obstacle nearby';
+      case 'safe':
+        return 'Safe';
+      case 'tracking':
+        return 'Monitoring';
+      case 'no_object':
+        return 'Path Clear';
+      case 'permission_denied':
+        return 'Camera permission required';
+      case 'processing':
+        return 'Checking...';
+      case 'error':
+      default:
+        return 'Start the camera';
+    }
   }
 
   if (!permission) {
@@ -139,18 +191,27 @@ export default function CameraScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>DriveSafe AI</Text>
-        <Text style={styles.subtitle}>Rear parking sensor style distance detection</Text>
-      </View>
+      <LoadingOverlay visible={loading} text={statusToLabel(status)} />
 
       <View style={styles.cameraWrapper}>
         <CameraView ref={cameraRef} style={styles.camera} facing="back" mute={true} />
 
         <View style={styles.distanceOverlay}>
           <DistanceDisplay distance={distance} />
-          <Text style={styles.distanceLabel}>Distance to obstacle</Text>
+
+          {objectName ? (
+            <View style={styles.objectInfo}>
+              <Text style={styles.objectText}>{objectName}</Text>
+              <Text style={styles.confText}>{(confidence * 100).toFixed(0)}%</Text>
+            </View>
+          ) : null}
+
+          <Text style={styles.messageText}>{statusToLabel(status)}</Text>
         </View>
+
+        {annotatedUri ? (
+          <Image source={{ uri: annotatedUri }} style={styles.annotatedPreview} />
+        ) : null}
       </View>
 
       <View style={styles.statusBar}>
@@ -163,18 +224,15 @@ export default function CameraScreen({ navigation }) {
         </View>
       </View>
 
-      <View style={styles.warningCard}>
-        <Text style={styles.warningTitle}>Warning Message</Text>
-        <Text style={styles.warningText}>{getWarningMessage(distance, status)}</Text>
-      </View>
+      
 
       {!running ? (
         <TouchableOpacity style={styles.btnStart} activeOpacity={0.8} onPress={handleStart}>
-          <Text style={styles.btnStartText}>Start Camera</Text>
+          <Text style={styles.btnStartText}>Start</Text>
         </TouchableOpacity>
       ) : (
         <TouchableOpacity style={styles.stopBtn} activeOpacity={0.8} onPress={handleStop}>
-          <Text style={styles.stopBtnText}>Stop Camera</Text>
+          <Text style={styles.stopBtnText}>Stop</Text>
         </TouchableOpacity>
       )}
     </SafeAreaView>
@@ -290,6 +348,38 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     textAlign: 'center',
     marginBottom: 20,
+  },
+  objectInfo: {
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  objectText: {
+    fontSize: 16,
+    color: COLORS.textPrimary,
+    fontWeight: '700',
+  },
+  confText: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  annotatedPreview: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 110,
+    height: 160,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  messageText: {
+    marginTop: 12,
+    fontSize: 22,
+    color: COLORS.textPrimary,
+    fontWeight: '700',
+    textAlign: 'center',
+    paddingHorizontal: 12,
   },
   btn: {
     backgroundColor: COLORS.primary,

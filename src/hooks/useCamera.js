@@ -31,16 +31,24 @@ export default function useCamera() {
     setCapturing(true);
     setFrameCount(0);
 
+    // The capture loop grabs a picture, calls the provided callback, and
+    // schedules the next capture. We use a small interval to balance
+    // responsiveness and CPU/bandwidth usage.
     const captureLoop = async () => {
       if (busyRef.current) return;
       busyRef.current = true;
 
       try {
+        // takePictureAsync options:
+        // - `quality`: 0-1, higher gives better image for detection but larger payload
+        // - `base64`: include base64 so we can send the image over HTTP
+        // - `skipProcessing`: when false, platform-specific processing (like rotation) runs
+        // - `mute`: disables shutter sound on supported platforms
         const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.2,
+          quality: 0.5,
           base64: true,
-          skipProcessing: true,
-          mute: true,  // Disable shutter sound
+          skipProcessing: true,  // Skip platform processing to minimize visual/audio feedback
+          mute: true,
         });
         setFrameCount(prev => prev + 1);
 

@@ -16,6 +16,12 @@ export default function HomeScreen({ navigation }) {
         <Text style={styles.resultsText}>
           Open the camera to see the live distance estimate, status, and warning message.
         </Text>
+        <Text style={styles.thresholdText}>
+          {/* Beginner-friendly threshold info */}
+          🟢 SAFE: Distance > 3m{"\n"}
+          🟡 CAUTION: 2m - 3m{"\n"}
+          🔴 STOP: Distance {'<'} 2m
+        </Text>
       </View>
 
       <View style={styles.bottom}>
@@ -77,6 +83,14 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 22,
+  },
+  thresholdText: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: 12,
+    fontWeight: '500',
   },
   bottom: {
     alignItems: 'center',

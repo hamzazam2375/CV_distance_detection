@@ -3,3 +3,4 @@ flask-cors==5.0.1
 opencv-python-headless==4.11.0.86
 ultralytics
 numpy
+requests
