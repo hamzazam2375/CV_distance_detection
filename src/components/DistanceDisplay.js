@@ -2,11 +2,13 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { COLORS } from '../constants/theme';
 
-export default function Speedometer({ speed = 0 }) {
+export default function DistanceDisplay({ distance = 0 }) {
+  const displayDistance = Number.isFinite(distance) ? Math.max(0, Math.round(distance)) : 0;
+
   return (
     <View style={styles.container}>
-      <Text style={styles.speed}>{Math.round(speed)}</Text>
-      <Text style={styles.unit}>km/h</Text>
+      <Text style={styles.value}>{displayDistance}</Text>
+      <Text style={styles.unit}>cm</Text>
     </View>
   );
 }
@@ -22,7 +24,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0, 229, 255, 0.3)',
   },
-  speed: {
+  value: {
     fontSize: 56,
     fontWeight: 'bold',
     color: COLORS.textPrimary,

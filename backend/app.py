@@ -10,7 +10,12 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-SAFE_RESPONSE = {'speed': 0, 'status': 'safe_default', 'unit': 'km/h'}
+MAX_DISTANCE_CM = 200.0
+MIN_DISTANCE_CM = 20.0
+WARNING_DISTANCE_CM = 100.0
+DANGER_DISTANCE_CM = 40.0
+
+SAFE_RESPONSE = {'distance': MAX_DISTANCE_CM, 'status': 'safe_default', 'unit': 'cm'}
 
 prev_gray = None
 prev_points = None
@@ -18,19 +23,18 @@ prev_time = None
 frame_number = 0
 stationary_count = 0
 
-MAX_SPEED = 80.0
+MAX_DISTANCE_SPAN_CM = MAX_DISTANCE_CM - MIN_DISTANCE_CM
 SMOOTH_WINDOW = 6
-SPEED_SCALE = 0.55
+DISTANCE_SCALE = 2.0
 MIN_FEATURES = 5
 SPIKE_THRESHOLD = 2.5
 MIN_MOTION_PX = 2.0
 BLUR_KERNEL = (15, 15)
 STATIONARY_COUNT_MAX = 1
-DEAD_ZONE_KMH = 2.0
 FRAME_WIDTH = 640
 WARMUP_FRAMES = 1
 
-speed_history = deque(maxlen=SMOOTH_WINDOW)
+distance_history = deque(maxlen=SMOOTH_WINDOW)
 
 LK_PARAMS = dict(
     winSize=(21, 21),
@@ -66,41 +70,41 @@ def preprocess(frame_bgr):
         return None
 
 
-def smooth_speed(raw_speed):
-    raw_speed = max(0.0, raw_speed)
+def smooth_distance(raw_distance):
+    raw_distance = max(MIN_DISTANCE_CM, min(float(raw_distance), MAX_DISTANCE_CM))
 
-    if len(speed_history) >= 3:
-        current_avg = sum(speed_history) / len(speed_history)
-        if current_avg > 0.5 and raw_speed > current_avg * SPIKE_THRESHOLD:
-            raw_speed = current_avg
+    if len(distance_history) >= 3:
+        current_avg = sum(distance_history) / len(distance_history)
+        if current_avg < MAX_DISTANCE_CM and raw_distance < current_avg / SPIKE_THRESHOLD:
+            raw_distance = current_avg
 
-    speed_history.append(raw_speed)
+    distance_history.append(raw_distance)
 
-    weights = list(range(1, len(speed_history) + 1))
-    weighted_sum = sum(s * w for s, w in zip(speed_history, weights))
+    weights = list(range(1, len(distance_history) + 1))
+    weighted_sum = sum(s * w for s, w in zip(distance_history, weights))
     return round(weighted_sum / sum(weights), 1)
 
 
-def estimate_speed(current_frame):
+def estimate_distance(current_frame):
     global prev_gray, prev_points, prev_time, stationary_count, frame_number
 
     frame_number += 1
     gray = preprocess(current_frame)
     if gray is None:
-        return 0.0, "preprocess_failed"
+        return MAX_DISTANCE_CM, "preprocess_failed"
 
     if frame_number <= WARMUP_FRAMES:
         prev_gray = gray
         prev_points = detect_features(gray)
         prev_time = time.time()
-        speed_history.append(0.0)
-        return 0.0, "warming_up"
+        distance_history.append(MAX_DISTANCE_CM)
+        return MAX_DISTANCE_CM, "warming_up"
 
     if prev_gray is None:
         prev_gray = gray
         prev_points = detect_features(gray)
         prev_time = time.time()
-        return 0.0, "initializing"
+        return MAX_DISTANCE_CM, "initializing"
 
     if prev_points is None or len(prev_points) < MIN_FEATURES:
         prev_points = detect_features(prev_gray)
@@ -108,7 +112,7 @@ def estimate_speed(current_frame):
             prev_gray = gray
             prev_time = time.time()
             stationary_count += 1
-            return smooth_speed(0.0), "no_object"
+            return smooth_distance(MAX_DISTANCE_CM), "no_object"
 
     try:
         next_points, status, _ = cv2.calcOpticalFlowPyrLK(
@@ -118,14 +122,14 @@ def estimate_speed(current_frame):
         prev_gray = gray
         prev_points = detect_features(gray)
         prev_time = time.time()
-        return smooth_speed(0.0), "flow_error"
+        return smooth_distance(MAX_DISTANCE_CM), "flow_error"
 
     if next_points is None or status is None:
         prev_gray = gray
         prev_points = detect_features(gray)
         prev_time = time.time()
         stationary_count += 1
-        return smooth_speed(0.0), "tracking_lost"
+        return smooth_distance(MAX_DISTANCE_CM), "tracking_lost"
 
     good_old = prev_points[status.flatten() == 1]
     good_new = next_points[status.flatten() == 1]
@@ -135,7 +139,7 @@ def estimate_speed(current_frame):
         prev_points = detect_features(gray)
         prev_time = time.time()
         stationary_count += 1
-        return smooth_speed(0.0), "no_object"
+        return smooth_distance(MAX_DISTANCE_CM), "no_object"
 
     displacements = np.sqrt(np.sum((good_new - good_old) ** 2, axis=1))
     median_displacement = float(np.median(displacements))
@@ -148,15 +152,20 @@ def estimate_speed(current_frame):
         prev_gray = gray
         prev_points = detect_features(gray)
         prev_time = current_time
-        status_str = "stationary" if stationary_count >= STATIONARY_COUNT_MAX else "minimal_motion"
-        return smooth_speed(0.0), status_str
+        status_str = "no_object" if stationary_count >= STATIONARY_COUNT_MAX else "minimal_motion"
+        return smooth_distance(MAX_DISTANCE_CM), status_str
 
     stationary_count = 0
-    raw_speed = min((median_displacement / dt) * SPEED_SCALE, MAX_SPEED)
-    speed = smooth_speed(raw_speed)
+    proximity_score = min((median_displacement / dt) * DISTANCE_SCALE, MAX_DISTANCE_SPAN_CM)
+    estimated_distance = MAX_DISTANCE_CM - proximity_score
+    estimated_distance = smooth_distance(estimated_distance)
 
-    if speed < DEAD_ZONE_KMH:
-        speed = 0.0
+    if estimated_distance <= DANGER_DISTANCE_CM:
+        status_str = "danger"
+    elif estimated_distance <= WARNING_DISTANCE_CM:
+        status_str = "warning"
+    else:
+        status_str = "tracking"
 
     prev_gray = gray
     prev_points = good_new.reshape(-1, 1, 2)
@@ -167,7 +176,7 @@ def estimate_speed(current_frame):
         if new_features is not None:
             prev_points = new_features
 
-    return speed, "tracking"
+    return estimated_distance, status_str
 
 
 @app.route('/upload-frame', methods=['POST'])
@@ -195,10 +204,10 @@ def upload_frame():
         except Exception:
             return jsonify(SAFE_RESPONSE), 200
 
-        speed, status = estimate_speed(frame_bgr)
-        speed = max(0.0, min(float(speed), MAX_SPEED))
+        distance, status = estimate_distance(frame_bgr)
+        distance = max(MIN_DISTANCE_CM, min(float(distance), MAX_DISTANCE_CM))
 
-        return jsonify({'speed': speed, 'status': status, 'unit': 'km/h'})
+        return jsonify({'distance': distance, 'status': status, 'unit': 'cm'})
 
     except (base64.binascii.Error, ValueError):
         return jsonify(SAFE_RESPONSE), 200
@@ -215,7 +224,7 @@ def reset():
     prev_time = None
     stationary_count = 0
     frame_number = 0
-    speed_history.clear()
+    distance_history.clear()
     return jsonify({'status': 'reset'})
 
 

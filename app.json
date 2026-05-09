@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "SpeedTracker",
-    "slug": "speed-tracker",
+    "name": "DriveSafe AI",
+    "slug": "drive-safe-ai",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -15,7 +15,7 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "This app uses the camera to capture frames for speed estimation."
+        "NSCameraUsageDescription": "This app uses the camera to estimate obstacle distance in real time."
       }
     },
     "android": {
@@ -29,7 +29,7 @@
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ],
-      "package": "com.hamzaazam2375.speedtracker"
+      "package": "com.hamzaazam2375.drivesafeai"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -38,7 +38,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow SpeedTracker to access your camera for speed detection."
+          "cameraPermission": "Allow DriveSafe AI to access your camera for distance detection."
         }
       ]
     ],

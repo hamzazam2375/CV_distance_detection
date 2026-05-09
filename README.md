@@ -1,14 +1,14 @@
-# Speed Tracker
+# DriveSafe AI
 
-Speed Tracker is a simple mobile app that uses the phone camera and a Python backend to estimate motion speed from camera frames.
+DriveSafe AI is a simple mobile app that uses the phone camera and a Python backend to estimate obstacle distance in real time.
 
 ## What it does
 
 - Opens the camera in the app
 - Captures frames at a fixed interval
 - Sends each frame to the backend
-- Tracks motion between frames and estimates speed in km/h
-- Shows the live speed and a short session summary
+- Tracks motion between frames and estimates obstacle distance in cm
+- Shows the live distance and a short status message
 
 ## How to run
 
@@ -44,8 +44,8 @@ If your device cannot reach the backend, update the IP address in `src/services/
 - Noise reduction: Gaussian blur is used to reduce noise. See `backend/app.py`.
 - Feature detection: Shi-Tomasi corners are detected with `goodFeaturesToTrack`. See `backend/app.py`.
 - Optical flow tracking: Lucas-Kanade optical flow tracks feature movement between frames. See `backend/app.py`.
-- Motion estimation: point displacement is measured and turned into speed. See `backend/app.py`.
-- Smoothing and filtering: weighted averaging, spike rejection, and dead-zone logic keep the speed stable. See `backend/app.py`.
+- Motion estimation: point displacement is measured and turned into distance. See `backend/app.py`.
+- Smoothing and filtering: weighted averaging and spike handling keep the distance stable. See `backend/app.py`.
 
 ## Project structure
 

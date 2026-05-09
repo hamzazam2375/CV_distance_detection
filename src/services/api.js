@@ -3,7 +3,7 @@ const TIMEOUT_MS = 8000;
 
 async function sendFrame(base64Image) {
   if (!base64Image || typeof base64Image !== 'string' || base64Image.length < 100) {
-    return { speed: 0, status: 'invalid_input' };
+    return { distance: 0, status: 'invalid_input' };
   }
 
   try {
@@ -23,17 +23,17 @@ async function sendFrame(base64Image) {
     try {
       data = await res.json();
     } catch {
-      return { speed: 0, status: 'invalid_response' };
+      return { distance: 0, status: 'invalid_response' };
     }
 
-    if (data && typeof data.speed === 'number' && isFinite(data.speed)) {
+    if (data && typeof data.distance === 'number' && isFinite(data.distance)) {
       return data;
     }
-    return { speed: 0, status: data?.status || 'no_speed' };
+    return { distance: 0, status: data?.status || 'no_distance' };
   } catch (e) {
     const isTimeout = e.name === 'AbortError';
     return {
-      speed: 0,
+      distance: 0,
       status: isTimeout ? 'timeout' : 'network_error',
       error: isTimeout ? 'Request timed out' : e.message,
     };

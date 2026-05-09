@@ -14,7 +14,7 @@ export const COLORS = {
 };
 
 export const SIZES = {
-  speedDisplay: 72,
+  distanceDisplay: 72,
   unitDisplay: 20,
   heading: 22,
   body: 16,

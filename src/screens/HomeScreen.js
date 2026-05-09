@@ -3,31 +3,20 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS } from '../constants/theme';
 
-export default function HomeScreen({ navigation, route }) {
-  const results = route.params?.results || null;
-
+export default function HomeScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Speed Tracker</Text>
-        <Text style={styles.subtitle}>CV-Based Motion Detection</Text>
+        <Text style={styles.title}>DriveSafe AI</Text>
+        <Text style={styles.subtitle}>Real-time obstacle distance detection</Text>
       </View>
 
-      {results && (
-        <View style={styles.resultsCard}>
-          <Text style={styles.resultsTitle}>Last Session</Text>
-          <View style={styles.statsRow}>
-            <StatItem label="AVG SPEED" value={`${results.avgSpeed} km/h`} />
-            <View style={styles.statDivider} />
-            <StatItem label="MAX SPEED" value={`${results.maxSpeed} km/h`} />
-          </View>
-          <View style={styles.statsRow}>
-            <StatItem label="FRAMES" value={`${results.totalFrames}`} />
-            <View style={styles.statDivider} />
-            <StatItem label="DURATION" value={`${results.duration}s`} />
-          </View>
-        </View>
-      )}
+      <View style={styles.resultsCard}>
+        <Text style={styles.resultsTitle}>Camera Monitoring</Text>
+        <Text style={styles.resultsText}>
+          Open the camera to see the live distance estimate, status, and warning message.
+        </Text>
+      </View>
 
       <View style={styles.bottom}>
         <TouchableOpacity
@@ -39,18 +28,9 @@ export default function HomeScreen({ navigation, route }) {
             <Text style={styles.startIcon}>▶</Text>
           </View>
         </TouchableOpacity>
-        <Text style={styles.startLabel}>Start Tracking</Text>
+        <Text style={styles.startLabel}>Open Camera</Text>
       </View>
     </SafeAreaView>
-  );
-}
-
-function StatItem({ label, value }) {
-  return (
-    <View style={styles.statItem}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={styles.statValue}>{value}</Text>
-    </View>
   );
 }
 
@@ -86,39 +66,17 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   resultsTitle: {
-    fontSize: 14,
+    fontSize: 16,
+    color: COLORS.textPrimary,
+    textAlign: 'center',
+    marginBottom: 12,
+    fontWeight: '700',
+  },
+  resultsText: {
+    fontSize: 15,
     color: COLORS.textSecondary,
     textAlign: 'center',
-    marginBottom: 16,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    marginVertical: 8,
-  },
-  statDivider: {
-    width: 1,
-    height: 36,
-    backgroundColor: COLORS.border,
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statLabel: {
-    fontSize: 10,
-    color: COLORS.textMuted,
-    fontWeight: '600',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: COLORS.primary,
+    lineHeight: 22,
   },
   bottom: {
     alignItems: 'center',
